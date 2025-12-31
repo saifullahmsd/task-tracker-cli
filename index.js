@@ -1,200 +1,153 @@
+require("dotenv").config();
+const connectDB = require("./db");
+const Task = require("./task.model");
+const mongoose = require("mongoose");
 
-const fs = require('fs');
-const path = require('path');
+async function main() {
+    await connectDB();
 
-// CONFIGURATION
-const FILE_PATH = path.join(__dirname, 'tasks.json');
-
-// DATABASE LOGIC
-// (Read)
-function loadTasks() {
-
-    if (!fs.existsSync(FILE_PATH)) {
-        return [];
-    }
+    const args = process.argv.slice(2);
+    const command = args[0];
+    const arg1 = args[1];
+    const arg2 = args[2];
 
     try {
-        const data = fs.readFileSync(FILE_PATH, 'utf8');
-        return data ? JSON.parse(data) : [];
+        switch (command) {
+            case "add":
+                await addTask(arg1)
+                break;
+
+            case "list":
+                await listTasks(arg1);
+                break;
+
+            case "delete":
+                await deleteTask(arg1);
+                break;
+
+            case "update":
+                await updateTask(arg1, arg2);
+                break;
+
+            case "mark-done":
+                await updateStatus(arg1, "done");
+                break;
+
+            case "mark-in-progress":
+                await updateStatus(arg1, "in-progress");
+                break;
+
+            default:
+                console.log("Commands: add <desc>, list [filter], delete <id>, update <id> <desc>, mark-done <id>");
+        }
     } catch (error) {
-        console.error("Error reading file:", error.message);
-        return [];
+        console.error("Error:", error.message);
+    } finally {
+
+        await mongoose.connection.close();
+        process.exit(0);
     }
 }
 
-// (Write) a task
-function saveTasks(tasks) {
-    try {
-
-        fs.writeFileSync(FILE_PATH, JSON.stringify(tasks, null, 2));
-    } catch (error) {
-        console.error("Error writing file:", error.message);
-    }
-}
-
-// CORE FEATURES (CRUD Operations)
-
-// Add Task
-function addTask(description) {
+// 1. Add Task 
+async function addTask(description) {
     if (!description) {
-        console.log("Error: Please provide a task description.");
+        console.log("Error: Description is required");
         return;
     }
 
-    const tasks = loadTasks();
-    let newId;
-    if (tasks.length === 0) {
-        newId = 1;
-    } else {
-        const lastTask = tasks[tasks.length - 1];
-        newId = lastTask.id + 1;
-    }
-    const newTask = {
-        id: newId,
+    const newTask = await Task.create({
         description: description,
-        status: "todo",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-    };
-
-    tasks.push(newTask);
-    saveTasks(tasks);
-    console.log(`Task added successfully (ID: ${newTask.id})`);
+        status: "todo"
+    })
+    console.log(`New task created [ID: ${newTask._id}]`);
 }
 
-// Update Task
-function updateTask(id, newDescription) {
-    if (!id || !newDescription) {
-        console.log("Error: Please provide ID and new description.");
-        return;
+// 2. List Tasks
+async function listTasks(filterStatus = null) {
+    let query = {};
+
+    if (filterStatus) {
+        query = { status: filterStatus }
     }
 
-    const tasks = loadTasks();
-    const taskIndex = tasks.findIndex(t => t.id === parseInt(id));
-
-    if (taskIndex === -1) {
-        console.log(`Error: Task with ID ${id} not found.`);
-        return;
-    }
-
-    tasks[taskIndex].description = newDescription;
-    tasks[taskIndex].updatedAt = new Date().toISOString();
-
-    saveTasks(tasks);
-    console.log(`Task ${id} updated successfully.`);
-}
-
-// Delete Task
-function deleteTask(id) {
-    if (!id) {
-        console.log("Error: Please provide a Task ID to delete.");
-        return;
-    }
-
-    let tasks = loadTasks();
-    const initialLength = tasks.length;
-
-    tasks = tasks.filter(t => t.id !== parseInt(id));
-
-    if (tasks.length === initialLength) {
-        console.log(`Error: Task with ID ${id} not found.`);
-        return;
-    }
-
-    saveTasks(tasks);
-    console.log(`Task ${id} deleted successfully.`);
-}
-
-// Mark Task (In Progress / Done)
-function markTask(id, status) {
-    if (!id) {
-        console.log("Error: Please provide a Task ID.");
-        return;
-    }
-
-    const tasks = loadTasks();
-    const task = tasks.find(t => t.id === parseInt(id));
-
-    if (!task) {
-        console.log(`Error: Task with ID ${id} not found.`);
-        return;
-    }
-
-    task.status = status;
-    task.updatedAt = new Date().toISOString();
-
-    saveTasks(tasks);
-    console.log(`Task ${id} marked as ${status}.`);
-}
-
-// List Tasks
-function listTasks(filterStatus = null) {
-    const tasks = loadTasks();
+    const tasks = await Task.find(query)
 
     if (tasks.length === 0) {
-        console.log("No tasks found.");
+        console.log("No tasks found");
+        return;
+    }
+    console.log(`\n=== YOUR TASKS: (${filterStatus ? `Status: ${filterStatus}` : "All"}) ===\n`)
+
+    tasks.forEach(task => {
+        console.log(`ID: ${task._id} | ${task.description}`)
+        console.log(`   Status: ${task.status}`);
+        console.log(" ---------------------------------- ")
+    })
+}
+
+// 3. Delete Task 
+async function deleteTask(_id) {
+
+    if (!mongoose.Types.ObjectId.isValid(_id)) {
+        console.log("Error: Invalid ID format. Please copy exact ID from list");
         return;
     }
 
-    // filterStatus 
-    const filteredTasks = filterStatus
-        ? tasks.filter(t => t.status === filterStatus)
-        : tasks;
+    const result = await Task.findByIdAndDelete(_id);
 
-    if (filteredTasks.length === 0) {
-        console.log(`No tasks found with status: ${filterStatus}`);
+    if (result) {
+        console.log(`Task Deleted Successfully.`);
+    } else {
+        console.log(`Error: Task with ID ${_id} not found.`);
+    }
+}
+
+// 4. Update Task 
+async function updateTask(_id, newDescription) {
+    if (!mongoose.Types.ObjectId.isValid(_id)) {
+        console.log("Error: Invalid ID format");
         return;
     }
 
-    console.log(`\nHere are your ${filterStatus || "all"} tasks:\n`);
+    if (!newDescription) {
+        console.log("Error: Description is required");
+        return;
+    }
 
-    filteredTasks.forEach(task => {
-        console.log(`[ID: ${task.id}] - ${task.description}`);
-        console.log(`    Status: ${task.status}`);
-        console.log(`    Created: ${task.createdAt}`);
-        console.log(`    Updated: ${task.updatedAt}`);
-        console.log("-------------------------------");
-    });
+    const updatedTask = await Task.findByIdAndUpdate(
+        _id,
+        { description: newDescription },
+        { new: true }
+    );
+
+    if (updatedTask) {
+
+        console.log(`Task Updated: "${updatedTask.description}" Successfully.`)
+    } else {
+        console.log(`Error: Task with ID ${_id} not found.`)
+    }
 }
 
-// COMMAND HANDLING (Process.argv)
-const args = process.argv.slice(2); // First 2 items skip 
-const command = args[0]; // 'add', 'update', 'list', etc.
-const arg1 = args[1];    // ID or Description or Filter
-const arg2 = args[2];    // Description (for update)
+// 5. Update Status
+async function updateStatus(_id, status) {
+    if (!mongoose.Types.ObjectId.isValid(_id)) {
+        console.log("Error: Invalid ID format.");
+        return;
+    }
 
-switch (command) {
-    case 'add':
-        addTask(arg1);
-        break;
+    const updatedTask = await Task.findByIdAndUpdate(
+        _id,
+        { status: status },
+        { new: true }
+    );
 
-    case 'update':
-        updateTask(arg1, arg2);
-        break;
-
-    case 'delete':
-        deleteTask(arg1);
-        break;
-
-    case 'mark-in-progress':
-        markTask(arg1, 'in-progress');
-        break;
-
-    case 'mark-done':
-        markTask(arg1, 'done');
-        break;
-
-    case 'list':
-        listTasks(arg1);
-        break;
-
-    default:
-        console.log("Unknown command. Available commands:");
-        console.log("  add \"Task Description\"");
-        console.log("  update <id> \"New Description\"");
-        console.log("  delete <id>");
-        console.log("  mark-in-progress <id>");
-        console.log("  mark-done <id>");
-        console.log("  list");
-        console.log("  list done | list todo | list in-progress");
+    if (updatedTask) {
+        console.log(`Task Status Updated to: '${status}'`);
+    } else {
+        console.log(`Error: Task not found.`);
+    }
 }
+
+
+main();
